@@ -23,7 +23,7 @@ This project provides a local solution for interacting with PDF documents using 
 *   **Retrieval-Augmented Generation (RAG):** Provides accurate and context-aware answers by grounding the responses in your uploaded document.
 *   **Local Document Q&A:** Ask questions and get answers based on your PDF documents, all running locally.
 *   **Persistent Vector Store:** Uses FAISS (via Langchain) for efficient storage and retrieval of document embeddings.
-*   **Optional Together AI Integration:** Can leverage the Together AI API (Llama 3) for enhanced language generation.  The core application can function, but the chatbot will not respond without a valid API key.
+*   **Gemini Integration:** Uses the Gemini API for language generation. The chatbot requires a valid Gemini API key.
 
 ## Technology Stack
 
@@ -34,7 +34,7 @@ This project provides a local solution for interacting with PDF documents using 
     *   [react-dropzone](https://react-dropzone.js.org/)
 *   **Backend:**
     *   [FastAPI](https://fastapi.tiangolo.com/)
-    *   [Together AI API](https://www.together.ai/) (Optional)
+    *   [Google Gemini API](https://ai.google.dev/gemini-api/docs)
     *   [Hugging Face Sentence Transformers](https://huggingface.co/sentence-transformers)
     *   [FAISS](https://github.com/facebookresearch/faiss) (via Langchain)
     *   [Langchain](https://www.langchain.com/)
@@ -44,7 +44,7 @@ This project provides a local solution for interacting with PDF documents using 
 
 *   [Node.js](https://nodejs.org/) and npm (Node Package Manager)
 *   Python 3.10 or higher
-*   (Optional) A [Together AI API key](https://www.together.ai/) (required for the chatbot to respond)
+*   A [Gemini API key](https://aistudio.google.com/app/apikey) (required for the chatbot to respond)
 
 ## Setup and Installation
 
@@ -53,3 +53,20 @@ This project provides a local solution for interacting with PDF documents using 
 ```bash
 git clone https://github.com/devcom33/Chat-with-Your-Documents.git
 cd Chat-with-Your-Documents
+```
+
+**2. Configure the Gemini API key:**
+
+Create a `.env` file in the project root:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+Get a key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+**3. Install the backend dependency:**
+
+```bash
+python -m pip install google-genai
+```

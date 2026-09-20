@@ -2,7 +2,8 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
-from together import Together
+from google import genai
+from google.genai import errors, types
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
@@ -13,14 +14,17 @@ from langchain_community.document_loaders import PyPDFLoader
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
-TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
-client = Together(api_key=TOGETHER_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY is missing from the .env file")
+client = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 #FastAPI
 app = FastAPI()
 
 origins = [
-    "http://localhost:5173",
+    os.getenv("FRONTEND_URL", "http://localhost:5173"),
 ]
 
 app.add_middleware(
@@ -63,16 +67,36 @@ def query(question: str):
     print(f"relevant_docs: {relevant_docs}")
     context = "\n".join([doc.page_content for doc in relevant_docs])
 
-    response = client.chat.completions.create(
-        model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        messages=[
-            {"role": "system", "content": "You are an AI assistant. Answer based on the provided context. Answer based on the provided context only, do not use other informations. If you cannot answer, say 'I need more context.'"},
-            {"role": "user", "content": f"Question: {question}\nContext: {context}"},
-        ],
+    prompt = (
+        "Answer the question using only the provided document context. "
+        "If the context does not contain the answer, say 'I need more context.'\n\n"
+        f"Question: {question}\nContext: {context}"
     )
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are an AI assistant. Answer based on the provided context only. "
+                    "Do not use outside information."
+                )
+            ),
+        )
+    except errors.ServerError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini is temporarily busy. Please try again in a moment.",
+        ) from error
+    except errors.ClientError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini request failed: {error.message}",
+        ) from error
+
 
     return {
-        "answer": response.choices[0].message.content,
+        "answer": response.text,
         "sources": [doc.metadata.get("source", "Unknown") for doc in relevant_docs],
     }
 
@@ -84,9 +108,17 @@ def process_document(file_path: str) -> List[str]:
         documents = loader.load()
         text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
         texts = text_splitter.split_documents(documents)
-        return [text.page_content for text in texts]
+        extracted_texts = [text.page_content.strip() for text in texts if text.page_content.strip()]
+        if not extracted_texts:
+            raise HTTPException(
+                status_code=400,
+                detail="The PDF contains no extractable text. Upload a text-based PDF or run OCR first.",
+            )
+        return extracted_texts
 
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=f"Error processing PDF document: {e}")
 
 @app.post("/upload/")
@@ -120,6 +152,8 @@ async def upload_document(file: UploadFile = File(...)):
 
     except Exception as e:
         print(f"Upload error: {e}")
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e)) # Return error as HTTPException
     finally:
         file.file.close()  # Ensure file is closed

@@ -2,6 +2,8 @@ import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import styled from 'styled-components';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const DropzoneContainer = styled.div`
   border: 2px dashed ${({ $isDragActive, $hasFile }) =>
     $isDragActive ? '#007bff' : $hasFile ? '#4caf50' : '#ccc'};
@@ -29,7 +31,7 @@ const handleUpload = async (file) => {
   formData.append("file", file); // Ensure correct key name matches FastAPI
 
   try {
-    const response = await fetch("http://localhost:8000/upload/", {
+    const response = await fetch(`${API_BASE_URL}/upload/`, {
       method: "POST",
       body: formData,
     });

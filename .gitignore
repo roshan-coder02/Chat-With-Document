@@ -2,4 +2,6 @@ __*
 .env
 node_*
 uploaded_documents/*
+faiss_vector_store/*
+.venv/
 front-chatdoc/node*
