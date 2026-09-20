@@ -6,7 +6,7 @@ from google import genai
 from google.genai import errors, types
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.text_splitter import CharacterTextSplitter
+from langchain_text_splitters import CharacterTextSplitter
 import shutil  # For saving uploaded files
 from pathlib import Path  # For safer path handling
 from typing import List  # Import List for type hinting
