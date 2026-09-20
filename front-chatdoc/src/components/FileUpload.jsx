@@ -4,6 +4,16 @@ import styled from 'styled-components';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
+const waitForProcessing = async (jobId) => {
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const response = await fetch(`${API_BASE_URL}/upload-status/${jobId}`);
+    const job = await response.json();
+    if (job.status === 'completed') return job;
+    if (job.status === 'failed') throw new Error(job.error || 'PDF processing failed.');
+  }
+};
+
 const DropzoneContainer = styled.div`
   border: 2px dashed ${({ $isDragActive, $hasFile }) =>
     $isDragActive ? '#007bff' : $hasFile ? '#4caf50' : '#ccc'};
@@ -41,7 +51,8 @@ const handleUpload = async (file) => {
       throw new Error(errorBody.detail || `HTTP error! Status: ${response.status}`);
     }
 
-    const result = await response.json();
+    const upload = await response.json();
+    const result = await waitForProcessing(upload.job_id);
     console.log("Upload Success:", result);
     return result;
   } catch (error) {
@@ -109,7 +120,7 @@ const FileUpload = ({ onFileUpload, currentFile }) => {
       ) : (
         <p>
           {isUploading
-            ? 'Uploading PDF...'
+            ? 'Processing PDF...'
             : isDragActive
             ? 'Drop the PDF here...'
             : "Drag 'n' drop a PDF here, or click to select"}

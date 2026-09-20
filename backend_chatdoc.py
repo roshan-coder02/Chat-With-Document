@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import BackgroundTasks, FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 from pypdf import PdfReader
 import os
@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
 import shutil  # For saving uploaded files
-from typing import List  # Import List for type hinting
+from typing import Dict, List  # Import List for type hinting
+from uuid import uuid4
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
@@ -67,6 +68,7 @@ def embed_query(text: str) -> List[float]:
 
 
 vector_store: List[dict] = []
+upload_jobs: Dict[str, dict] = {}
 
 
 def save_vector_store() -> None:
@@ -156,27 +158,68 @@ def split_text(text: str, chunk_size: int = 1000) -> List[str]:
     ]
 
 
-def process_document(file_path: str) -> List[str]:
-    """Loads a PDF and splits its extracted text into chunks."""
+def process_document(file_path: str):
+    """Yield text chunks page by page to keep large PDFs out of memory."""
     try:
         reader = PdfReader(file_path)
-        document_text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        extracted_texts = split_text(document_text)
-        if not extracted_texts:
+        found_text = False
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            for text_chunk in split_text(page_text):
+                found_text = True
+                yield text_chunk
+        if not found_text:
             raise HTTPException(
                 status_code=400,
                 detail="The PDF contains no extractable text. Upload a text-based PDF or run OCR first.",
             )
-        return extracted_texts
     except HTTPException:
         raise
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Error processing PDF document: {error}") from error
 
 
-@app.post("/upload/")
-async def upload_document(file: UploadFile = File(...)):
+def process_upload_job(job_id: str, file_path: str, safe_filename: str) -> None:
     global vector_store
+    try:
+        new_vector_store = []
+        pending_texts = []
+        for text in process_document(file_path):
+            pending_texts.append(text)
+            if len(pending_texts) == 20:
+                document_embeddings = embed_documents(pending_texts, "RETRIEVAL_DOCUMENT")
+                new_vector_store.extend(
+                    {"text": chunk, "embedding": embedding, "source": safe_filename}
+                    for chunk, embedding in zip(pending_texts, document_embeddings)
+                )
+                pending_texts.clear()
+
+        if pending_texts:
+            document_embeddings = embed_documents(pending_texts, "RETRIEVAL_DOCUMENT")
+            new_vector_store.extend(
+                {"text": chunk, "embedding": embedding, "source": safe_filename}
+                for chunk, embedding in zip(pending_texts, document_embeddings)
+            )
+
+        vector_store = new_vector_store
+        save_vector_store()
+        upload_jobs[job_id] = {"status": "completed", "filename": safe_filename}
+    except errors.ServerError:
+        upload_jobs[job_id] = {
+            "status": "failed",
+            "error": "Gemini is temporarily busy while processing the PDF. Please try again.",
+        }
+    except errors.ClientError as error:
+        upload_jobs[job_id] = {"status": "failed", "error": f"Gemini embedding failed: {error.message}"}
+    except HTTPException as error:
+        upload_jobs[job_id] = {"status": "failed", "error": error.detail}
+    except Exception as error:
+        print(f"Upload processing error: {error}")
+        upload_jobs[job_id] = {"status": "failed", "error": str(error)}
+
+
+@app.post("/upload/")
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     try:
         if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported.")
@@ -186,25 +229,10 @@ async def upload_document(file: UploadFile = File(...)):
         with open(file_path, "wb") as output_file:
             shutil.copyfileobj(file.file, output_file)
 
-        texts = process_document(file_path)
-        document_embeddings = embed_documents(texts, "RETRIEVAL_DOCUMENT")
-        new_vector_store = [
-            {"text": text, "embedding": embedding, "source": safe_filename}
-            for text, embedding in zip(texts, document_embeddings)
-        ]
-        vector_store = new_vector_store
-        save_vector_store()
-        return {"filename": safe_filename, "message": "PDF document uploaded and processed successfully."}
-    except errors.ServerError as error:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini is temporarily busy while processing the PDF. Please try again.",
-        ) from error
-    except errors.ClientError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gemini embedding failed: {error.message}",
-        ) from error
+        job_id = str(uuid4())
+        upload_jobs[job_id] = {"status": "processing", "filename": safe_filename}
+        background_tasks.add_task(process_upload_job, job_id, file_path, safe_filename)
+        return {"job_id": job_id, "filename": safe_filename, "status": "processing"}
     except HTTPException:
         raise
     except Exception as error:
@@ -212,6 +240,14 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         file.file.close()
+
+
+@app.get("/upload-status/{job_id}")
+async def upload_status(job_id: str):
+    job = upload_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Upload job not found.")
+    return job
 
 
 @app.post("/query/")
