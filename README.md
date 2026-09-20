@@ -22,7 +22,7 @@ This project provides a local solution for interacting with PDF documents using 
 *   **FastAPI Backend:** Handles document processing and question answering efficiently.
 *   **Retrieval-Augmented Generation (RAG):** Provides accurate and context-aware answers by grounding the responses in your uploaded document.
 *   **Local Document Q&A:** Ask questions and get answers based on your PDF documents, all running locally.
-*   **Persistent Vector Store:** Uses FAISS (via Langchain) for efficient storage and retrieval of Gemini-generated document embeddings.
+*   **Persistent Vector Store:** Uses a lightweight JSON vector store with Gemini-generated document embeddings.
 *   **Gemini Integration:** Uses the Gemini API for language generation. The chatbot requires a valid Gemini API key.
 
 ## Technology Stack
@@ -36,8 +36,6 @@ This project provides a local solution for interacting with PDF documents using 
     *   [FastAPI](https://fastapi.tiangolo.com/)
     *   [Google Gemini API](https://ai.google.dev/gemini-api/docs)
     *   [Google Gemini Embeddings](https://ai.google.dev/gemini-api/docs/embeddings)
-    *   [FAISS](https://github.com/facebookresearch/faiss) (via Langchain)
-    *   [Langchain](https://www.langchain.com/)
     *   [Python](https://www.python.org/) 3.10+
 
 ## Prerequisites

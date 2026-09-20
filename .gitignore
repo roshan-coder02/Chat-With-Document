@@ -3,5 +3,6 @@ __*
 node_*
 uploaded_documents/*
 faiss_vector_store/*
+vector_store.json
 .venv/
 front-chatdoc/node*

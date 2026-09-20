@@ -3,8 +3,4 @@ uvicorn[standard]
 python-multipart
 python-dotenv
 google-genai
-langchain
-langchain-community
-langchain-text-splitters
-faiss-cpu
 pypdf

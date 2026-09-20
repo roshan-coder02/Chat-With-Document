@@ -1,16 +1,14 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
+from pypdf import PdfReader
 import os
+import json
+import math
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
-from langchain_community.vectorstores import FAISS
-from langchain_core.embeddings import Embeddings
-from langchain_text_splitters import CharacterTextSplitter
 import shutil  # For saving uploaded files
-from pathlib import Path  # For safer path handling
 from typing import List  # Import List for type hinting
-from langchain_community.document_loaders import PyPDFLoader
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
@@ -35,64 +33,83 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Constants
-VECTOR_STORE_PATH = "faiss_vector_store"
-UPLOAD_FOLDER = "uploaded_documents"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-class GeminiEmbeddings(Embeddings):
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        if not texts:
-            return []
-        response = client.models.embed_content(
-            model=GEMINI_EMBEDDING_MODEL,
-            contents=texts,
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_DOCUMENT",
-                output_dimensionality=768,
-            ),
-        )
-        return [embedding.values for embedding in response.embeddings]
-
-    def embed_query(self, text: str) -> List[float]:
-        response = client.models.embed_content(
-            model=GEMINI_EMBEDDING_MODEL,
-            contents=text,
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY",
-                output_dimensionality=768,
-            ),
-        )
-        return response.embeddings[0].values
-
-
-embeddings = GeminiEmbeddings()
-
-vector_store = None
-def load_vector_store():
-    global vector_store
-    try:
-        vector_store = FAISS.load_local(VECTOR_STORE_PATH, embeddings, allow_dangerous_deserialization=True)
-        print("Vector store loaded successfully from disk.")
-    except Exception as e:
-        print(f"Error loading vector store from disk: {e}. Creating a new one.")
-        vector_store = FAISS.from_texts(["Initial empty document."], embedding=embeddings)
-        vector_store.save_local(VECTOR_STORE_PATH)
-
-load_vector_store()  # Load on application startup
 
 class QueryRequest(BaseModel):
     question: str
 
-def query(question: str):
-    global vector_store
-    if vector_store is None:
-        return {"answer": "Vector store is not initialized. Please upload a document."}
 
-    relevant_docs = vector_store.similarity_search(question, k=2)
+# Constants
+VECTOR_STORE_PATH = "vector_store.json"
+UPLOAD_FOLDER = "uploaded_documents"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def embed_documents(texts: List[str], task_type: str) -> List[List[float]]:
+    if not texts:
+        return []
+    response = client.models.embed_content(
+        model=GEMINI_EMBEDDING_MODEL,
+        contents=texts,
+        config=types.EmbedContentConfig(
+            task_type=task_type,
+            output_dimensionality=768,
+        ),
+    )
+    return [embedding.values for embedding in response.embeddings]
+
+
+def embed_query(text: str) -> List[float]:
+    return embed_documents([text], "RETRIEVAL_QUERY")[0]
+
+
+vector_store: List[dict] = []
+
+
+def save_vector_store() -> None:
+    with open(VECTOR_STORE_PATH, "w", encoding="utf-8") as store_file:
+        json.dump(vector_store, store_file)
+
+
+def load_vector_store() -> None:
+    global vector_store
+    try:
+        with open(VECTOR_STORE_PATH, encoding="utf-8") as store_file:
+            vector_store = json.load(store_file)
+        print("Vector store loaded successfully from disk.")
+    except (FileNotFoundError, json.JSONDecodeError):
+        vector_store = []
+        print("No vector store found. A new one will be created after the first upload.")
+
+
+def cosine_similarity(first: List[float], second: List[float]) -> float:
+    numerator = sum(left * right for left, right in zip(first, second))
+    first_norm = math.sqrt(sum(value * value for value in first))
+    second_norm = math.sqrt(sum(value * value for value in second))
+    if not first_norm or not second_norm:
+        return 0.0
+    return numerator / (first_norm * second_norm)
+
+
+def find_relevant_documents(question: str, limit: int = 2) -> List[dict]:
+    question_embedding = embed_query(question)
+    ranked_documents = sorted(
+        vector_store,
+        key=lambda document: cosine_similarity(question_embedding, document["embedding"]),
+        reverse=True,
+    )
+    return ranked_documents[:limit]
+
+
+load_vector_store()
+
+
+def query(question: str):
+    if not vector_store:
+        return {"answer": "Please upload a document first."}
+
+    relevant_docs = find_relevant_documents(question)
     print(f"len(relevant_docs): {len(relevant_docs)}")
-    print(f"relevant_docs: {relevant_docs}")
-    context = "\n".join([doc.page_content for doc in relevant_docs])
+    context = "\n".join(document["text"] for document in relevant_docs)
 
     prompt = (
         "Answer the question using only the provided document context. "
@@ -121,76 +138,71 @@ def query(question: str):
             detail=f"Gemini request failed: {error.message}",
         ) from error
 
-
     return {
         "answer": response.text,
-        "sources": [doc.metadata.get("source", "Unknown") for doc in relevant_docs],
+        "sources": [document["source"] for document in relevant_docs],
     }
 
 
+def split_text(text: str, chunk_size: int = 1000) -> List[str]:
+    return [
+        text[start:start + chunk_size].strip()
+        for start in range(0, len(text), chunk_size)
+        if text[start:start + chunk_size].strip()
+    ]
+
+
 def process_document(file_path: str) -> List[str]:
-    """Loads and processes a PDF document, returning texts."""
+    """Loads a PDF and splits its extracted text into chunks."""
     try:
-        loader = PyPDFLoader(file_path)
-        documents = loader.load()
-        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
-        texts = text_splitter.split_documents(documents)
-        extracted_texts = [text.page_content.strip() for text in texts if text.page_content.strip()]
+        reader = PdfReader(file_path)
+        document_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        extracted_texts = split_text(document_text)
         if not extracted_texts:
             raise HTTPException(
                 status_code=400,
                 detail="The PDF contains no extractable text. Upload a text-based PDF or run OCR first.",
             )
         return extracted_texts
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Error processing PDF document: {error}") from error
 
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Error processing PDF document: {e}")
 
 @app.post("/upload/")
 async def upload_document(file: UploadFile = File(...)):
-    global vector_store  # Access the global variable
-
+    global vector_store
     try:
-        if not file.filename.endswith(".pdf"):
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(file_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+        with open(file_path, "wb") as output_file:
+            shutil.copyfileobj(file.file, output_file)
 
         texts = process_document(file_path)
-
-        new_vector_store = FAISS.from_texts(texts, embedding=embeddings)
-        if vector_store is None:
-            vector_store = new_vector_store
-        else:
-            vector_store.merge_from(new_vector_store) # Fixed merging
-        vector_store.save_local(VECTOR_STORE_PATH) # Save updated store
-        
-        if hasattr(vector_store, 'index') and hasattr(vector_store.index, 'ntotal'):
-            index_size = vector_store.index.ntotal
-            print(f"FAISS index Size: {index_size}")
-        else:
-            print("Could not determine FAISS index size.")
-
+        embeddings = embed_documents(texts, "RETRIEVAL_DOCUMENT")
+        vector_store.extend(
+            {"text": text, "embedding": embedding, "source": file.filename}
+            for text, embedding in zip(texts, embeddings)
+        )
+        save_vector_store()
         return {"filename": file.filename, "message": "PDF document uploaded and processed successfully."}
-
-    except Exception as e:
-        print(f"Upload error: {e}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=str(e)) # Return error as HTTPException
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Upload error: {error}")
+        raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
-        file.file.close()  # Ensure file is closed
-
+        file.file.close()
 
 
 @app.post("/query/")
 async def ask_question(request: QueryRequest):
     return query(request.question)
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
