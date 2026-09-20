@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import CharacterTextSplitter
 import shutil  # For saving uploaded files
 from pathlib import Path  # For safer path handling
@@ -19,6 +19,7 @@ if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY is missing from the .env file")
 client = genai.Client(api_key=GEMINI_API_KEY)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
 
 #FastAPI
 app = FastAPI()
@@ -39,7 +40,33 @@ VECTOR_STORE_PATH = "faiss_vector_store"
 UPLOAD_FOLDER = "uploaded_documents"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+class GeminiEmbeddings(Embeddings):
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        response = client.models.embed_content(
+            model=GEMINI_EMBEDDING_MODEL,
+            contents=texts,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_DOCUMENT",
+                output_dimensionality=768,
+            ),
+        )
+        return [embedding.values for embedding in response.embeddings]
+
+    def embed_query(self, text: str) -> List[float]:
+        response = client.models.embed_content(
+            model=GEMINI_EMBEDDING_MODEL,
+            contents=text,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=768,
+            ),
+        )
+        return response.embeddings[0].values
+
+
+embeddings = GeminiEmbeddings()
 
 vector_store = None
 def load_vector_store():
