@@ -182,11 +182,12 @@ async def upload_document(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, output_file)
 
         texts = process_document(file_path)
-        embeddings = embed_documents(texts, "RETRIEVAL_DOCUMENT")
-        vector_store.extend(
+        document_embeddings = embed_documents(texts, "RETRIEVAL_DOCUMENT")
+        new_vector_store = [
             {"text": text, "embedding": embedding, "source": file.filename}
-            for text, embedding in zip(texts, embeddings)
-        )
+            for text, embedding in zip(texts, document_embeddings)
+        ]
+        vector_store = new_vector_store
         save_vector_store()
         return {"filename": file.filename, "message": "PDF document uploaded and processed successfully."}
     except HTTPException:
