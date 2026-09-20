@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import styled from 'styled-components';
 
@@ -37,26 +37,39 @@ const handleUpload = async (file) => {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      const errorBody = await response.json().catch(() => ({}));
+      throw new Error(errorBody.detail || `HTTP error! Status: ${response.status}`);
     }
 
     const result = await response.json();
     console.log("Upload Success:", result);
+    return result;
   } catch (error) {
     console.error("Upload Error:", error);
+    throw error;
   }
 };
 
 
 
 const FileUpload = ({ onFileUpload, currentFile }) => {
+  const [uploadError, setUploadError] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
   const onDrop = useCallback(
-    (acceptedFiles) => {
+    async (acceptedFiles) => {
       const file = acceptedFiles[0];
-      if (file)
-      {
-        onFileUpload(file);
-        handleUpload(file);
+      if (file) {
+        setUploadError('');
+        setIsUploading(true);
+        try {
+          await handleUpload(file);
+          onFileUpload(file);
+        } catch (error) {
+          setUploadError(error.message || 'Upload failed.');
+        } finally {
+          setIsUploading(false);
+        }
       }
     },
     [onFileUpload]
@@ -74,7 +87,7 @@ const FileUpload = ({ onFileUpload, currentFile }) => {
     accept: 'application/pdf',
     maxFiles: 1,
     onDrop,
-    disabled: !!currentFile,
+    disabled: !!currentFile || isUploading,
   });
 
   return (
@@ -91,11 +104,14 @@ const FileUpload = ({ onFileUpload, currentFile }) => {
         </div>
       ) : (
         <p>
-          {isDragActive
+          {isUploading
+            ? 'Uploading PDF...'
+            : isDragActive
             ? 'Drop the PDF here...'
             : "Drag 'n' drop a PDF here, or click to select"}
         </p>
       )}
+      {uploadError && <p style={{ color: '#c62828' }}>{uploadError}</p>}
     </DropzoneContainer>
   );
 };
