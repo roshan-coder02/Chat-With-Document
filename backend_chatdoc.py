@@ -4,6 +4,7 @@ from pypdf import PdfReader
 import os
 import json
 import math
+from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
@@ -47,15 +48,18 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def embed_documents(texts: List[str], task_type: str) -> List[List[float]]:
     if not texts:
         return []
-    response = client.models.embed_content(
-        model=GEMINI_EMBEDDING_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(
-            task_type=task_type,
-            output_dimensionality=768,
-        ),
-    )
-    return [embedding.values for embedding in response.embeddings]
+    embeddings = []
+    for start in range(0, len(texts), 20):
+        response = client.models.embed_content(
+            model=GEMINI_EMBEDDING_MODEL,
+            contents=texts[start:start + 20],
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=768,
+            ),
+        )
+        embeddings.extend(embedding.values for embedding in response.embeddings)
+    return embeddings
 
 
 def embed_query(text: str) -> List[float]:
@@ -177,19 +181,30 @@ async def upload_document(file: UploadFile = File(...)):
         if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        safe_filename = Path(file.filename).name
+        file_path = os.path.join(UPLOAD_FOLDER, safe_filename)
         with open(file_path, "wb") as output_file:
             shutil.copyfileobj(file.file, output_file)
 
         texts = process_document(file_path)
         document_embeddings = embed_documents(texts, "RETRIEVAL_DOCUMENT")
         new_vector_store = [
-            {"text": text, "embedding": embedding, "source": file.filename}
+            {"text": text, "embedding": embedding, "source": safe_filename}
             for text, embedding in zip(texts, document_embeddings)
         ]
         vector_store = new_vector_store
         save_vector_store()
-        return {"filename": file.filename, "message": "PDF document uploaded and processed successfully."}
+        return {"filename": safe_filename, "message": "PDF document uploaded and processed successfully."}
+    except errors.ServerError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini is temporarily busy while processing the PDF. Please try again.",
+        ) from error
+    except errors.ClientError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini embedding failed: {error.message}",
+        ) from error
     except HTTPException:
         raise
     except Exception as error:

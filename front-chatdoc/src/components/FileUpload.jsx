@@ -87,6 +87,10 @@ const FileUpload = ({ onFileUpload, currentFile }) => {
     accept: 'application/pdf',
     maxFiles: 1,
     onDrop,
+    onDropRejected: (rejections) => {
+      const reason = rejections[0]?.errors[0]?.message || 'Only PDF files are supported.';
+      setUploadError(reason);
+    },
     disabled: !!currentFile || isUploading,
   });
 
