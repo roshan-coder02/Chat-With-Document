@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import styled from 'styled-components';
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -116,7 +116,13 @@ const ChatInterface = ({ documentName }) => {
       const response = await api.post('/query/', { question: trimmedInput });
       setMessages((prev) => [...prev, { id: Date.now(), text: response.data.answer, sender: 'bot' }]);
     } catch (error) {
-      setMessages((prev) => [...prev, { id: Date.now(), text: 'Error: Could not get response', sender: 'bot' }]);
+      const detail = error.response?.data?.detail;
+      const message = detail
+        ? `Error: ${detail}`
+        : error.response
+          ? `Error: Backend returned HTTP ${error.response.status}`
+          : 'Error: Could not connect to the backend. Check VITE_API_URL and CORS settings.';
+      setMessages((prev) => [...prev, { id: Date.now(), text: message, sender: 'bot' }]);
     } finally {
       setIsLoading(false);
     }
